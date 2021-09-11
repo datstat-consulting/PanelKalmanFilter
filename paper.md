@@ -7,10 +7,12 @@ tags:
 authors:
   - name: Adriel Ong
     orcid: 0000-0003-2787-7235
-
-affiliation:
+    affiliation: "1, 2"
+affiliations:
  - name: Chief Statistician, DATSTAT Consulting
    index: 1
+ - name: Academic Council, M&S Research Hub
+   index: 2
 date: 20 September 2021
 bibliography: paper.bib
 
