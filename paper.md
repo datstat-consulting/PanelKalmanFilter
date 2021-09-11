@@ -5,11 +5,11 @@ tags:
   - Kalman Filter
   - Time Series
 authors:
-  - name: Adriel Ong
+  - name: Adriel Ong^[https://datstat_consulting.github.io]
     orcid: 0000-0003-2787-7235
 
 affiliations:
- - name: Chief Statistician, DATSTAT Consulting^[https://datstat_consulting.github.io]
+ - name: Chief Statistician, DATSTAT Consulting
    index: 1
 date: 20 September 2021
 bibliography: paper.bib
