@@ -8,7 +8,7 @@ authors:
   - name: Adriel Ong
     orcid: 0000-0003-2787-7235
 
-affiliations:
+affiliation:
  - name: Chief Statistician, DATSTAT Consulting
    index: 1
 date: 20 September 2021
