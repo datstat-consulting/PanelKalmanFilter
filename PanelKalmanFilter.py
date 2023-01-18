@@ -4,18 +4,17 @@ from scipy import stats
 from scipy.optimize import minimize
 
 class PanelKalmanFilter():
-"""Here, we initialize our dimensions and initial parameters. They are as follows:
-
-- `stateDim`: number of states
-- `obsDim`: number of measures per state
-- `K`: number of independent variables
-- `N`: number of groups
-- `T`: number of time periods
-- `init_exp`: our initial expected value
-- `init_var`: our initial variance
-- `params_init`: our parameter initialization
-One will have to edit the parameters for different configurations.
-"""
+    """Here, we initialize our dimensions and initial parameters. They are as follows:
+    - `stateDim`: number of states
+    - `obsDim`: number of measures per state
+    - `K`: number of independent variables
+    - `N`: number of groups
+    - `T`: number of time periods
+    - `init_exp`: our initial expected value
+    - `init_var`: our initial variance
+    - `params_init`: our parameter initialization
+    One will have to edit the parameters for different configurations.
+    """
     def __init__(self, endog, exog, stateDim, obsDim):
         self.stateDim = stateDim
         self.obsDim = obsDim
@@ -28,18 +27,17 @@ One will have to edit the parameters for different configurations.
         self.init_exp = np.zeros(stateDim)
         self.init_var = np.eye(stateDim)
         self.obsDict = []
-            for i in range(0,stateDim*obsDim):
-                self.obsDict.append(list(endog.columns[0+i*stateDim*obsDim:stateDim*obsDim*(i+1)]))
+        for i in range(0,stateDim*obsDim):
+            self.obsDict.append(list(endog.columns[0+i*stateDim*obsDim:stateDim*obsDim*(i+1)]))
 
-"""The following function is a helper function meant to work with other more complex functions. It reshapes a list of initial parameters into their proper forms.
-- `A`: diagonal matrix of dimension `stateDim`$\times$`stateDim`. This matrix holds parameters for the state equation.
-- `V`: diagonal matrix of dimension `stateDim`$\times$`stateDim` using initialized parameters indexed `stateDim`$^{2}$:(`stateDim`$^{2}+$`stateDim`). Holds the independent error terms for the state equation.
-- `C`: diagonal matrix of dimension `stateDim*obsDim`$\times$`stateDim`. Holds parameters for the state variable in the measurement equation.
-- `W`: diagonal matrix of dimension `stateDim*obsDim`$\times$`stateDim*obsDim`. Holds the independent error terms for the measurement equation.
-- `B`: matrix for exogenous variable parameters. It is $N \times K$, with a row for each group, and a column for each independent variable.
-- `Sigma2MLE`: initialized variance for exogenous parameters.
-"""
-
+    """The following function is a helper function meant to work with other more complex functions. It reshapes a list of initial parameters into their proper forms.
+    - `A`: diagonal matrix of dimension `stateDim`$\times$`stateDim`. This matrix holds parameters for the state equation.
+    - `V`: diagonal matrix of dimension `stateDim`$\times$`stateDim` using initialized parameters indexed `stateDim`$^{2}$:(`stateDim`$^{2}+$`stateDim`). Holds the independent error terms for the state equation.
+    - `C`: diagonal matrix of dimension `stateDim*obsDim`$\times$`stateDim`. Holds parameters for the state variable in the measurement equation.
+    - `W`: diagonal matrix of dimension `stateDim*obsDim`$\times$`stateDim*obsDim`. Holds the independent error terms for the measurement equation.
+    - `B`: matrix for exogenous variable parameters. It is $N \times K$, with a row for each group, and a column for each independent variable.
+    - `Sigma2MLE`: initialized variance for exogenous parameters.
+    """
     def unpackParams(params):
         place = 0
         A = np.reshape(params[place:(place + self.stateDim**2)], (self.stateDim, self.stateDim))
@@ -69,7 +67,7 @@ One will have to edit the parameters for different configurations.
 #-2.57127719,1.79427074,3.76140164,2.04323101,-1.35583690,-1.30289481,3.46299721,5.46711510,
 #-5.99897917,2.01711379,2.65831208,1.38660559,-3.92584823,3.47669802]
 
-"""This function estimates the Kalman Filter on time increments, using observations per time. This code also calculates likelihood for the linear model $y = Az + Bx + w$, where $w$ is the error term, $x$ is a vector of exogenous variables, and $z$ is the state variable."""
+    """This function estimates the Kalman Filter on time increments, using observations per time. This code also calculates likelihood for the linear model $y = Az + Bx + w$, where $w$ is the error term, $x$ is a vector of exogenous variables, and $z$ is the state variable."""
 
     def incrementKF(i, params,post_exp,post_var, new_exog, new_obs):
         """ unpack parameters """
@@ -146,7 +144,7 @@ One will have to edit the parameters for different configurations.
         print("Current average negative log-likelihood: ",neg_avg_log_like)
         return [neg_avg_log_like, post_exp]
 
-"""This is a wrapper function for use with our optimization algorithm."""
+    """This is a wrapper function for use with our optimization algorithm."""
 
     def wrapLoglike(params):
         #print("current parameters:{}".format(params))
@@ -154,13 +152,13 @@ One will have to edit the parameters for different configurations.
         self.post_exp = post_exp = sampler[1]
         return sampler[0]
 
-"""We use the minimize function from the scipy package to perform Maximum Likelihood Estimation. This wrapper function allows convenience. It returns our parameter estimates and our state variable, for use in forecasting."""
+    """We use the minimize function from the scipy package to perform Maximum Likelihood Estimation. This wrapper function allows convenience. It returns our parameter estimates and our state variable, for use in forecasting."""
 
     def wrapMinimize(params_init, algo):
         MLE = minimize(fun = wrapLoglike, x0 = params_init, method = algo)
         return(MLE.x, self.post_exp)
 
-"""This function forecasts the endogenous variable for time increments."""
+    """This function forecasts the endogenous variable for time increments."""
 
     def incrementForecast(i, params, new_exog, t, statevar):
         """ unpack parameters """
@@ -180,7 +178,7 @@ One will have to edit the parameters for different configurations.
 
         return forecast_obs
 
-"""This function forecasts the endogenous variable per individual."""
+    """This function forecasts the endogenous variable per individual."""
 
     def indivForecast(params,i, statevar):
         iExog = []
@@ -194,7 +192,7 @@ One will have to edit the parameters for different configurations.
         new_obs = []
 
         for t in range(0,len(obsDict)):
-        """ predict and update """
+            """ predict and update """
             #reverse = list(reversed(range(len(obsDict))))
             new_exog = np.transpose(np.array(iExog[obsDict[t]]))
             forecast_endog = incrementForecast(i, params, new_exog, (t + 1), statevar[i])
@@ -202,7 +200,7 @@ One will have to edit the parameters for different configurations.
         #new_obs = pd.data
         return new_obs
 
-"""This function is a wrapper function for forecasting."""
+    """This function is a wrapper function for forecasting."""
 
     def forecastKalman(params, statevar):
         forecast = []
