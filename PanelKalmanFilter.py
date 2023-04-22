@@ -22,10 +22,13 @@ class PanelKalmanFilter():
         self.exog = exog
         self.post_exp = []
         #self.K = len(data.columns.levels[0]) - 1
-        self.K = len(exog)
+        if exog!= None:
+            self.K = len(exog)
+        else:
+            self.K = 0
         self.N = len(endog.iloc[:,0])
         #self.T = int(len(data.columns.levels[1])/(obsDim*stateDim))
-        self.T = int(len(exog[0].iloc[0,:])/(obsDim*stateDim))
+        self.T = int(len(endog.iloc[0,:])/(obsDim*stateDim))
         self.init_exp = np.zeros(stateDim)
         self.init_var = np.eye(stateDim)
         self.obsDict = []
@@ -59,7 +62,7 @@ class PanelKalmanFilter():
         W = np.diag(np.exp(params[(place):(place+self.obsDim*self.stateDim)]))
         place += self.obsDim*self.stateDim
 
-        if self.exog is None:
+        if self.exog == None:
             B = None
             sigma2MLE = None
         else:
@@ -109,8 +112,12 @@ class PanelKalmanFilter():
         """ step likelihood """
         dist = stats.multivariate_normal(mean = np.reshape(obs_prior_exp,(len(obs_prior_exp),)),cov = obs_prior_var)
         #dist = stats.multivariate_normal(mean = post_exp, cov = post_var)
-        exodist = stats.multivariate_normal(mean = 0, cov = sigma2MLE)
-        log_like = dist.logpdf(new_obs) + exodist.logpdf(residual)
+        if self.exog != None:
+            exodist = stats.multivariate_normal(mean = 0, cov = sigma2MLE)
+            log_like = dist.logpdf(new_obs) + exodist.logpdf(residual)
+        else:
+            log_like = dist.logpdf(new_obs)
+        
         return [post_exp,post_var,log_like]#, post_exog]
 
     """
@@ -119,27 +126,32 @@ class PanelKalmanFilter():
 
     def indivKF(self, params,init_exp,init_var,i):
         iData = endog.iloc[i,:]
-        if self.exog is None:
+        if self.exog == None:
             iExog = None
+            init_obs_exog = 0
         else:
             iExog = []
             for t in range(0,self.K):
                 iExog.append(self.exog[t].iloc[i,:])
             iExog = pd.concat(iExog, axis = 1).transpose()
+            init_obs_exog = np.array(iExog[self.obsDict[0]])
 
         """ initialization """
         post_exp = init_exp
         post_var = init_var
 
         init_obs = np.array(iData.loc[self.obsDict[0]])
-        init_obs_exog = np.array(iExog[self.obsDict[0]])
         dist = stats.multivariate_normal(mean = init_obs, cov = 1)
         log_like = dist.logpdf(init_obs)
 
         for t in range(0,(self.T-1)):
             """ predict and update """
             new_obs = np.transpose(np.array(iData[self.obsDict[t+1]]))
-            new_exog = np.transpose(np.array(iExog[self.obsDict[t+1]]))
+            if self.exog == None:
+                new_exog = 0
+            else:
+                new_exog = np.transpose(np.array(iExog[self.obsDict[t+1]]))
+
             new_post = self.incrementKF(i, params,post_exp,post_var, new_exog, new_obs)
             """ replace """
             post_exp = new_post[0]
@@ -181,7 +193,7 @@ class PanelKalmanFilter():
     """
 
     def wrapMinimize(self, params_init, algo):
-        MLE = minimize(fun = wrapLoglike, x0 = params_init, method = algo)
+        MLE = minimize(fun = self.wrapLoglike, x0 = params_init, method = algo)
         return(MLE.x, self.post_exp)
 
     """This function forecasts the endogenous variable for time increments."""
@@ -193,54 +205,69 @@ class PanelKalmanFilter():
         V = unpacked[1]
         C = unpacked[2]
         #W = unpacked[3]
-        B = unpacked[4][i,:]
+        if type(new_exog) == list and new_exog.any() != None:
+            B = unpacked[4][i,:]
+            exogMultiply = new_exog@B
+        else:
+            exogMultiply = 0
+            
+            
         #sigma2MLE = unpacked[5]
 
         """ predict step"""
         state_exp = np.linalg.matrix_power(A, t)@statevar
  
         """ forecast step """
-        forecast_obs = new_exog@B + C@state_exp
+        forecast_obs = exogMultiply + C@state_exp
 
         return forecast_obs
 
     """This function forecasts the endogenous variable per individual."""
 
-    def indivForecast(self, params, i, statevar):
-        if self.exog is None:
+    def indivForecast(self, params, i, statevar, newexog, predRange):
+        if newexog == None:
             iExog = None
         else:
             iExog = []
             for t in range(0, self.K):
-                iExog.append(self.exog[t].iloc[i, :])
+                iExog.append(newexog[t].iloc[i, :])
             iExog = pd.concat(iExog, axis=1).transpose()
 
-        obsDict = []
-        for t in range(0,int(len(iExog.columns)/(self.stateDim*self.obsDim))):
-            obsDict.append(list(iExog.columns[0+t*self.stateDim*self.obsDim:self.stateDim*self.obsDim*(t+1)]))
+            obsDict = []
+            for t in range(0,int(len(iExog.columns)/(self.stateDim*self.obsDim))):
+                obsDict.append(list(iExog.columns[0+t*self.stateDim*self.obsDim:self.stateDim*self.obsDim*(t+1)]))
 
         new_obs = []
 
-        for t in range(0,len(self.obsDict)):
+        if newexog == None:
+            predRange = predRange
+        else:
+            predRange = len(obsDict)
+
+        for t in range(0,predRange):
             """ predict and update """
             #reverse = list(reversed(range(len(obsDict))))
-            new_exog = np.transpose(np.array(iExog[obsDict[t]]))
-            forecast_endog = incrementForecast(i, params, new_exog, (t + 1), statevar[i])
+            if newexog != None:
+                new_exog = np.transpose(np.array(iExog[obsDict[t]]))
+            else:
+                new_exog = None
+
+            forecast_endog = self.incrementForecast(i, params, new_exog, (t + 1), statevar[i])
             new_obs.append(forecast_endog)
         #new_obs = pd.data
         return new_obs
 
     """This function is a wrapper function for forecasting."""
 
-    def forecastKalman(self, params, statevar):
+    def forecastKalman(self, params, statevar, newexog, predRange):
         forecast = []
         for i in range(0,self.N):
-            indiv_forecast = self.indivForecast(params,i, statevar)
+            indiv_forecast = self.indivForecast(params,i, statevar, newexog, predRange)
             forecast.append(indiv_forecast)
         return forecast
 
-    def wrapForecast(self, params, statevar):
-        forecast = self.forecastKalman(params, statevar)
+    def wrapForecast(self, params, statevar, newexog = None, predRange = 5):
+        forecast = self.forecastKalman(params, statevar, newexog, predRange)
         forecast_predict = []
         for t in range(len(forecast)):
             forecast_predict.append(pd.DataFrame(np.concatenate(forecast[t])).transpose())
