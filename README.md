@@ -15,7 +15,7 @@ We load a dummy dataset to use. This dataset was generated in R with the followi
 `dummy_panel <- panelSim(N = 3, T = 360, alphaL = .6, alphaK = .4, DGP = 1,
                         rho = .7, sigeps = .1, sigomg = .3, rholnw = .3)`
 ```
-df = pd.read_csv('/work/dummy_training.csv')
+df = pd.read_csv('dummy_training.csv')
 df = df.iloc[:,1:9]
 ```
 We reshape the dataset from a long panel format to a wide panel format.
@@ -29,30 +29,28 @@ exog = [data['sX'] ,data['fX'], data['pX1'], data['pX2'], data['pX3']]
 ```
 Set random seed for reproducibility.
 ```
-np.random.seed(2)
+#set your own seed
+np.random.seed()
 ```
-Import the class, then set an instance.
+Import the class, then set an instance. Note that you can leave the `exog` argument empty to estimate a Kalman Filter only for the endogenous variable.
 ```
 import PanelKalmanFilter
 pkf = PanelKalmanFilter(stateDim = 2, obsDim = 3, endog = endog, exog = exog)
 ```
 Solve the minimization problem with BFGS.
 ```
-params_init = pkf.paramInit()
-#MLE = wrapMinimize(params_init = params_init, algo = 'BFGS')
-MLE = minimize(fun = pkf.wrapLoglike, x0 = pkf.defaultInitParams, method='BFGS')
+params_init = pkf.paramInit() #using random initial weights needs more experimentation
+MLE = wrapMinimize(params_init = params_init, algo = 'BFGS') #needs experimentation with Gradient Descent for random initial weights
 ```
-Load the test dummy dataset and perform the forecast using .
+Load the test dummy dataset and perform the forecast. For practical applications, one may need to forecast the exogenous variables first.
 ```
-testing = pd.read_csv('/work/dummy_testing.csv')
+testing = pd.read_csv('dummy_testing.csv')
 testing = testing.iloc[:,1:9]
 testdata = testing.pivot(index='idvar', columns='timevar')
 exog_test = [testdata['sX'] ,testdata['fX'], testdata['pX1'], testdata['pX2'], testdata['pX3']]
-forecast = pkf.forecastKalman(MLE.x, pkf.post_exp)
-forecast_predict = []
-for t in range(len(forecast)):
-    forecast_predict.append(pd.DataFrame(np.concatenate(forecast[t])).transpose())
-forecast_dataframe = pd.concat(forecast_predict)
+
+forecast = pkf.wrapForecast(MLE[0], MLE[1], exog_test)
+forecast
 ```
 # References
 
