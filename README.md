@@ -42,7 +42,7 @@ Solve the minimization problem with BFGS.
 params_init = pkf.paramInit() #using random initial weights needs more experimentation
 MLE = wrapMinimize(params_init = params_init, algo = 'BFGS') #needs experimentation with Gradient Descent for random initial weights
 ```
-Load the test dummy dataset and perform the forecast. For practical applications, one may need to forecast the exogenous variables first.
+Load the test dummy dataset and perform the forecast. For practical applications, you may need to forecast the exogenous variables first.
 ```
 testing = pd.read_csv('dummy_testing.csv')
 testing = testing.iloc[:,1:9]
