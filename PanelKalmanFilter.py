@@ -277,9 +277,9 @@ class PanelKalmanFilter():
     def paramInit(self):
         # Define the number of parameters depending on whether exogenous data is provided
         if self.exog is None:
-            num_params = 1 + self.stateDim**2 + self.stateDim + self.stateDim*self.obsDim + self.obsDim*self.stateDim + self.stateDim*self.obsDim
+            num_params = 1 + self.stateDim**2 + self.stateDim + self.obsDim*self.stateDim + self.obsDim*self.stateDim + self.N
         else:
-            num_params = 1 + self.stateDim**2 + self.stateDim + self.stateDim*self.obsDim + self.obsDim*self.stateDim + self.stateDim*self.obsDim + self.N*self.K
+            num_params = 1 + self.stateDim**2 + self.stateDim + self.obsDim*self.stateDim + self.obsDim*self.stateDim + self.N*self.K
 
         # Define an initial guess for the parameters
         initial_guess = np.random.rand(num_params)
