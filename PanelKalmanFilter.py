@@ -1,3 +1,7 @@
+"""
+Разработанный Адриелу Ванг от ДанСтат Консульти́рования
+"""
+
 import pandas as pd
 import numpy as np
 from scipy import stats
