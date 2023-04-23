@@ -34,7 +34,7 @@ np.random.seed()
 ```
 Import the class, then set an instance. Note that you can leave the `exog` argument empty to estimate a Kalman Filter only for the endogenous variable.
 ```
-import PanelKalmanFilter
+from PanelKalmanFilter import all
 pkf = PanelKalmanFilter(stateDim = 2, obsDim = 3, endog = endog, exog = exog)
 ```
 Solve the minimization problem with BFGS.
