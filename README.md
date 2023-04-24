@@ -53,8 +53,6 @@ forecast = pkf.wrapForecast(MLE[0], MLE[1], exog_test)
 forecast
 ```
 # References
-
-* Bressert, Eli. "SciPy and NumPy: an overview for developers." (2012).
-* Hamilton, James Douglas. Time series analysis. Princeton university press, 2020.
-* Hu, Bisong, et al. "Integration of a Kalman filter in the geographically weighted regression for modeling the transmission of hand, foot and mouth disease." BMC public health 20.1 (2020): 1-15.
+* Hamilton, J. D. (2020). Time series analysis. Princeton university press.
+* Hu, B., Qiu, W., Xu, C., & Wang, J. (2020). Integration of a Kalman filter in the geographically weighted regression for modeling the transmission of hand, foot and mouth disease. BMC public health, 20, 1-15.
 * Kerbl, S., & Sigmund, M. (2011). What drives aggregate credit risk?. Oesterreichische Nationalbank Financial Stability Report, 22.
