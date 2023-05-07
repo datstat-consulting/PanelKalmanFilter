@@ -6,6 +6,12 @@ For linear dynamic processes with noisy measurements, one can posit the existenc
   
 While `PanelKalmanFilter` was developed for Financial data, it can be used for a wide range of fields. In particular, we can see longitudinal and panel data in Economics and Biostatistics receive extensive treatment with Kalman Filtering with our package. 
 
+## Installation
+You can install the package using pip:
+```
+pip install git+https://github.com/datstat-consulting/PanelKalmanFilter
+```
+
 # Example
 
 We load a dummy dataset to use. This dataset was generated in R with the following code:
