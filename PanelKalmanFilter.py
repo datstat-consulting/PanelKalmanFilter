@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 from scipy.optimize import minimize
+#from EconmetPerceptron.WorkhorseFunctions import ols_estimator_torch
 
 class PanelKalmanFilter():
     """Here, we initialize our dimensions and initial parameters. They are as follows:
@@ -26,7 +27,7 @@ class PanelKalmanFilter():
         self.exog = exog
         self.post_exp = []
         #self.K = len(data.columns.levels[0]) - 1
-        if exog!= None:
+        if exog is not None:
             self.K = len(exog)
         else:
             self.K = 0
@@ -38,6 +39,12 @@ class PanelKalmanFilter():
         self.obsDict = []
         for i in range(0,stateDim*obsDim):
             self.obsDict.append(list(endog.columns[0+i*stateDim*obsDim:stateDim*obsDim*(i+1)]))
+        self.defaultInitParams = [1.69271632, -7.53703822, -4.23337738, 7.737883 ,-0.34051513, -0.9349601,
+                                -1.81282109,-2.00712979,-1.87171474,5.94652967,6.35815269,4.86795731,
+                                -1.58287851,-1.23747189,-1.41927504,-2.26545219,-1.5234699,2.08084558,
+                                -3.76331173,4.46234078,-2.33860228,1.35042423,3.35580212,2.1897442,
+                                -1.81117239, -1.83429089, 3.54230905, 4.98408931, -6.51527362, 2.03645846,
+                                2.32582213, 0.85892667, -3.80231989, 4.16718004]
 
     """The following function is a helper function meant to work with other more complex functions. It reshapes a list of initial parameters into their proper forms.
     - `A`: diagonal matrix of dimension `stateDim`$\times$`stateDim`. This matrix holds parameters for the state equation.
@@ -124,7 +131,7 @@ class PanelKalmanFilter():
 
     def indivKF(self, params,init_exp,init_var,i):
         iData = endog.iloc[i,:]
-        if self.exog == None:
+        if self.exog is None:
             iExog = None
             init_obs_exog = 0
         else:
