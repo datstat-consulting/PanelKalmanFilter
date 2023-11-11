@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "PanelKalmanFilter"
 version = "1.0"
-authors = [{ name = "Adriel Ong", email = "adriel_datstat@zohomail.com" }, {name = "Azriel Cais Baluyut", email = ""}, {name = "Jowi Rapha Cruz", email = ""}]
+authors = [{ name = "Adriel Ong", email = "adriel_datstat@zohomail.com" }, {name = "Azriel Cais Baluyut"}, {name = "Jowi Rapha Cruz"}]
 description = "Python library that implements a Kalman Filter for panel data, especially with exogenous variables."
 readme = "README.md"
 license = { file="LICENSE" }
