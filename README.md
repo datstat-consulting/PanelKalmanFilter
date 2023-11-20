@@ -46,7 +46,7 @@ pkf = PanelKalmanFilter(stateDim = 2, obsDim = 3, endog = endog, exog = exog)
 Solve the minimization problem with BFGS.
 ```
 params_init = pkf.paramInit() #using random initial weights needs more experimentation
-MLE = wrapMinimize(params_init = params_init, algo = 'BFGS') #needs experimentation with Gradient Descent for random initial weights
+MLE = pkf.wrapMinimize(params_init = params_init, algo = 'BFGS') #needs experimentation with Gradient Descent for random initial weights
 ```
 Load the test dummy dataset and perform the forecast. For practical applications, you may need to forecast the exogenous variables first.
 ```
