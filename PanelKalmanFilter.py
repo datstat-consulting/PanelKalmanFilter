@@ -1,291 +1,260 @@
-"""
-Разработанный Адриелу Ванг от ДанСтат Консульти́рования
-"""
+"""Maximum-likelihood estimation and prediction for independent panel units."""
 
-import pandas as pd
+from dataclasses import dataclass
+from numbers import Integral
+
 import numpy as np
-from scipy import stats
+import pandas as pd
+from scipy.linalg import cho_factor, cho_solve
 from scipy.optimize import minimize
-#from EconmetPerceptron.WorkhorseFunctions import ols_estimator_torch
 
-class PanelKalmanFilter():
-    """Here, we initialize our dimensions and initial parameters. They are as follows:
-    - `stateDim`: number of states
-    - `obsDim`: number of measures per state
-    - `K`: number of independent variables
-    - `N`: number of groups
-    - `T`: number of time periods
-    - `init_exp`: our initial expected value
-    - `init_var`: our initial variance
-    - `params_init`: our parameter initialization
-    One will have to edit the parameters for different configurations.
+__all__ = ["PanelKalmanFilter", "FilterResult"]
+
+
+@dataclass(frozen=True)
+class FilterResult:
+    means: np.ndarray
+    covariances: np.ndarray
+    log_likelihood: np.ndarray
+
+
+class PanelKalmanFilter:
+    """Shared linear state-space model with optional unit-specific regressors.
+
+    Endog is a wide DataFrame with one row per entity. Columns are ordered
+    time-major, with stateDim * obsDim consecutive observations per period.
+    Each exog DataFrame follows the same layout.
     """
-    def __init__(self, stateDim, obsDim, endog, exog = None):
-        self.stateDim = stateDim
-        self.obsDim = obsDim
-        self.endog = endog
-        self.exog = exog
-        self.post_exp = []
-        #self.K = len(data.columns.levels[0]) - 1
-        if exog is not None:
-            self.K = len(exog)
-        else:
-            self.K = 0
-        self.N = len(endog.iloc[:,0])
-        #self.T = int(len(data.columns.levels[1])/(obsDim*stateDim))
-        self.T = int(len(endog.iloc[0,:])/(obsDim*stateDim))
+
+    def __init__(self, stateDim, obsDim, endog, exog=None):
+        if not all(isinstance(n, Integral) and n > 0 for n in (stateDim, obsDim)):
+            raise ValueError("State and observation dimensions must be positive integers.")
+        if not isinstance(endog, pd.DataFrame) or endog.empty:
+            raise ValueError("endog must be a nonempty wide DataFrame.")
+        if not endog.index.is_unique or not endog.columns.is_unique:
+            raise ValueError("Panel row and column labels must be unique.")
+        self.stateDim, self.obsDim = stateDim, obsDim
+        self.observation_size = stateDim * obsDim
+        self.N, width = endog.shape
+        self.T, remainder = divmod(width, self.observation_size)
+        if remainder:
+            raise ValueError("Each period must contain stateDim * obsDim observations.")
+        self.endog = endog.copy()
+        self.exog = tuple(exog) if exog is not None else ()
+        self.K = len(self.exog)
+        self._observations = self.endog.to_numpy(dtype=float).reshape(
+            self.N, self.T, self.observation_size
+        )
+        if np.isinf(self._observations).any():
+            raise ValueError("Use NaN for missing observations.")
+        self._exogenous = self._exog_array(self.exog, endog.columns)
         self.init_exp = np.zeros(stateDim)
         self.init_var = np.eye(stateDim)
-        self.obsDict = []
-        for i in range(0,stateDim*obsDim):
-            self.obsDict.append(list(endog.columns[0+i*stateDim*obsDim:stateDim*obsDim*(i+1)]))
-        self.defaultInitParams = [1.69271632, -7.53703822, -4.23337738, 7.737883 ,-0.34051513, -0.9349601,
-                                -1.81282109,-2.00712979,-1.87171474,5.94652967,6.35815269,4.86795731,
-                                -1.58287851,-1.23747189,-1.41927504,-2.26545219,-1.5234699,2.08084558,
-                                -3.76331173,4.46234078,-2.33860228,1.35042423,3.35580212,2.1897442,
-                                -1.81117239, -1.83429089, 3.54230905, 4.98408931, -6.51527362, 2.03645846,
-                                2.32582213, 0.85892667, -3.80231989, 4.16718004]
+        self.post_exp = []
+        self.obsDict = [
+            list(endog.columns[start:start + self.observation_size])
+            for start in range(0, width, self.observation_size)
+        ]
+        self.defaultInitParams = self.paramInit()
 
-    """The following function is a helper function meant to work with other more complex functions. It reshapes a list of initial parameters into their proper forms.
-    - `A`: diagonal matrix of dimension `stateDim`$\times$`stateDim`. This matrix holds parameters for the state equation.
-    - `V`: diagonal matrix of dimension `stateDim`$\times$`stateDim` using initialized parameters indexed `stateDim`$^{2}$:(`stateDim`$^{2}+$`stateDim`). Holds the independent error terms for the state equation.
-    - `C`: diagonal matrix of dimension `stateDim*obsDim`$\times$`stateDim`. Holds parameters for the state variable in the measurement equation.
-    - `W`: diagonal matrix of dimension `stateDim*obsDim`$\times$`stateDim*obsDim`. Holds the independent error terms for the measurement equation.
-    - `B`: matrix for exogenous variable parameters. It is $N \times K$, with a row for each group, and a column for each independent variable.
-    - `Sigma2MLE`: initialized variance for exogenous parameters.
-    """
+    def _exog_array(self, frames, columns):
+        if not frames:
+            return None
+        for frame in frames:
+            if (not isinstance(frame, pd.DataFrame) or not frame.index.is_unique
+                    or not frame.columns.is_unique
+                    or set(frame.index) != set(self.endog.index)
+                    or set(frame.columns) != set(columns)):
+                raise ValueError("Exogenous tables must match the entity and observation labels.")
+        values = np.stack([frame.reindex(index=self.endog.index, columns=columns).to_numpy(dtype=float)
+                           for frame in frames], axis=-1)
+        if not np.isfinite(values).all():
+            raise ValueError("Exogenous values must be finite.")
+        return values.reshape(self.N, -1, self.observation_size, len(frames))
+
+    @property
+    def n_parameters(self):
+        return self.stateDim**2 + self.stateDim + 2 * self.observation_size + self.N * self.K
+
     def unpackParams(self, params):
-        place = 0
-        A = np.reshape(params[place:(place + self.stateDim**2)], (self.stateDim, self.stateDim))
-        place += self.stateDim**2
-        V = np.diag(np.exp(params[(place):(place+self.stateDim)]))
-        place += self.stateDim
-        C = np.zeros(shape = (self.stateDim*self.obsDim,self.stateDim))
-        for j in range(0,self.stateDim):
-            C[(self.obsDim*(j)):self.obsDim*(j+1),j] = params[place+self.obsDim*(j):(place+(self.obsDim)*(j+1))]
-        place += self.obsDim*self.stateDim
-        W = np.diag(np.exp(params[(place):(place+self.obsDim*self.stateDim)]))
-        place += self.obsDim*self.stateDim
+        values = np.asarray(params, dtype=float)
+        n, m = self.stateDim, self.observation_size
+        if (values.ndim != 1 or len(values) < self.n_parameters
+                or not np.isfinite(values).all()):
+            raise ValueError(f"Provide at least {self.n_parameters} finite parameters.")
+        A = values[:n*n].reshape(n, n)
+        log_q = values[n*n:n*n+n]
+        loading = values[n*n+n:n*n+n+m]
+        log_r = values[n*n+n+m:n*n+n+2*m]
+        if np.any(np.abs(np.r_[log_q, log_r]) > 100):
+            raise ValueError("Log variances are outside the numerical range.")
+        Q, R = np.diag(np.exp(log_q)), np.diag(np.exp(log_r))
+        C = np.zeros((m, n))
+        C[np.arange(m), np.repeat(np.arange(n), self.obsDim)] = loading
+        offset = n*n + n + 2*m
+        B = values[offset:offset + self.N*self.K].reshape(self.K, self.N).T if self.K else None
+        legacy_variance = values[self.n_parameters] if self.K and len(values) > self.n_parameters else None
+        return [A, Q, C, R, B, legacy_variance]
 
-        if self.exog == None:
-            B = None
-            sigma2MLE = None
-        else:
-            B = np.zeros(shape = (self.N, self.K))
-            for j in range(0, self.K):
-                B[:,j] = params[place+(self.N)*(j):place+(self.N)*(j+1)]
-            place += self.N*self.K
-            sigma2MLE = params[place]
+    def _step(self, model, mean, covariance, observation, exogenous, *, transition=True):
+        A, Q, C, R = model
+        if transition:
+            mean = A @ mean
+            covariance = A @ covariance @ A.T + Q
+        keep = ~np.isnan(observation)
+        if not keep.any():
+            return mean, covariance, 0.
+        design = C[keep]
+        noise = R[np.ix_(keep, keep)]
+        innovation = observation[keep] - (C @ mean + exogenous)[keep]
+        cross_cov = covariance @ design.T
+        innovation_cov = design @ cross_cov + noise
+        factor = cho_factor(innovation_cov, lower=True)
+        gain = cho_solve(factor, cross_cov.T).T
+        mean = mean + gain @ innovation
+        update = np.eye(self.stateDim) - gain @ design
+        covariance = update @ covariance @ update.T + gain @ noise @ gain.T
+        covariance = (covariance + covariance.T) / 2
+        log_likelihood = -0.5 * (
+            keep.sum() * np.log(2 * np.pi) + 2 * np.log(np.diag(factor[0])).sum()
+            + innovation @ cho_solve(factor, innovation)
+        )
+        return mean, covariance, float(log_likelihood)
 
-        return [A,V,C,W,B, sigma2MLE]
+    def incrementKF(self, i, params, post_exp, post_var, new_exog, new_obs):
+        A, Q, C, R, B, _ = self.unpackParams(params)
+        adjusted = 0. if B is None else np.asarray(new_exog) @ B[i]
+        return list(self._step((A, Q, C, R), post_exp, post_var, np.asarray(new_obs), adjusted))
 
-    """
-    This function estimates the Kalman Filter on time increments, using observations per time. 
-    This code also calculates likelihood for the linear model $y = Az + Bx + w$, 
-    where $w$ is the error term, $x$ is a vector of exogenous variables, and $z$ is the state variable.
-    """
+    def _unit(self, model, B, unit, initial_mean, initial_covariance):
+        means = np.empty((self.T, self.stateDim))
+        covariances = np.empty((self.T, self.stateDim, self.stateDim))
+        log_likelihood = np.empty(self.T)
+        offsets = np.zeros(self.T) if B is None else self._exogenous[unit] @ B[unit]
+        mean, covariance = initial_mean, initial_covariance
+        for t, observation in enumerate(self._observations[unit]):
+            mean, covariance, contribution = self._step(
+                model, mean, covariance, observation, offsets[t], transition=t > 0
+            )
+            means[t], covariances[t], log_likelihood[t] = mean, covariance, contribution
+        return means, covariances, log_likelihood
 
-    def incrementKF(self, i, params,post_exp,post_var, new_exog, new_obs):
-        """ unpack parameters """
-        unpacked = self.unpackParams(params)
-        A = unpacked[0]
-        V = unpacked[1]
-        C = unpacked[2]
-        W = unpacked[3]
-        
-        #postexpHold = self.post_exp
+    def indivKF(self, params, init_exp, init_var, i):
+        A, Q, C, R, B, _ = self.unpackParams(params)
+        means, _, likelihood = self._unit((A, Q, C, R), B, i, init_exp, init_var)
+        return [float(likelihood.sum()), means[-1]]
 
-        """ predict step"""
-        prior_exp = A@post_exp
-        prior_var = A@post_var@np.transpose(A) + V
-        obs_prior_exp = C@prior_exp
-        obs_prior_var = C@prior_var@np.transpose(C) + W
-        if self.exog is None:
-            sum_exog = 0
-        else:
-            B = unpacked[4][i,:]
-            sigma2MLE = unpacked[5]
-            sum_exog = new_exog@B
+    def filter(self, params=None, *, initial_mean=None, initial_covariance=None):
+        """Return state estimates, covariances and every Gaussian likelihood increment."""
+        params = self.params_ if params is None else params
+        A, Q, C, R, B, _ = self.unpackParams(params)
+        mean = self.init_exp if initial_mean is None else np.asarray(initial_mean, dtype=float)
+        covariance = self.init_var if initial_covariance is None else np.asarray(
+            initial_covariance, dtype=float
+        )
+        n = self.stateDim
+        if (mean.shape != (n,) or covariance.shape != (n, n)
+                or not np.isfinite(mean).all() or not np.isfinite(covariance).all()
+                or not np.allclose(covariance, covariance.T)
+                or np.linalg.eigvalsh(covariance).min() < -1e-12):
+            raise ValueError("Provide a finite initial mean and positive semidefinite covariance.")
+        units = [self._unit((A, Q, C, R), B, unit, mean, covariance) for unit in range(self.N)]
+        return FilterResult(*[np.stack(items) for items in zip(*units)])
 
-        """ update step """
-        residual = new_obs - obs_prior_exp - sum_exog
-        obs_prior_cov = prior_var@np.transpose(C)
-        kalman_gain = obs_prior_cov@ np.linalg.inv(obs_prior_var)
-        post_exp = prior_exp + kalman_gain@residual
-        post_var = prior_var - kalman_gain@np.transpose(obs_prior_cov)
+    def smooth(self, params=None):
+        """Rauch–Tung–Striebel smoothed posterior state means and covariances."""
+        params = self.params_ if params is None else params
+        filtered = self.filter(params)
+        A, Q, *_ = self.unpackParams(params)
+        means = filtered.means.copy()
+        covariances = filtered.covariances.copy()
+        for unit in range(self.N):
+            for t in range(self.T - 2, -1, -1):
+                filtered_cov = filtered.covariances[unit, t]
+                cross = filtered_cov @ A.T
+                prior = A @ cross + Q
+                gain = cho_solve(cho_factor(prior), cross.T).T
+                means[unit, t] += gain @ (means[unit, t + 1] - A @ filtered.means[unit, t])
+                posterior = filtered_cov + gain @ (covariances[unit, t + 1] - prior) @ gain.T
+                covariances[unit, t] = (posterior + posterior.T) / 2
+        return FilterResult(means, covariances, filtered.log_likelihood)
 
-        """ step likelihood """
-        dist = stats.multivariate_normal(mean = np.reshape(obs_prior_exp,(len(obs_prior_exp),)),cov = obs_prior_var)
-        #dist = stats.multivariate_normal(mean = post_exp, cov = post_var)
-        if self.exog != None:
-            exodist = stats.multivariate_normal(mean = 0, cov = sigma2MLE)
-            log_like = dist.logpdf(new_obs) + exodist.logpdf(residual)
-        else:
-            log_like = dist.logpdf(new_obs)
-        
-        return [post_exp,post_var,log_like]#, post_exog]
-
-    """
-    This function estimates a Kalman filter for each unit - sectors, regions, countries, groups, etc.
-    """
-
-    def indivKF(self, params,init_exp,init_var,i):
-        iData = endog.iloc[i,:]
-        if self.exog is None:
-            iExog = None
-            init_obs_exog = 0
-        else:
-            iExog = []
-            for t in range(0,self.K):
-                iExog.append(self.exog[t].iloc[i,:])
-            iExog = pd.concat(iExog, axis = 1).transpose()
-            init_obs_exog = np.array(iExog[self.obsDict[0]])
-
-        """ initialization """
-        post_exp = init_exp
-        post_var = init_var
-
-        init_obs = np.array(iData.loc[self.obsDict[0]])
-        dist = stats.multivariate_normal(mean = init_obs, cov = 1)
-        log_like = dist.logpdf(init_obs)
-
-        for t in range(0,(self.T-1)):
-            """ predict and update """
-            new_obs = np.transpose(np.array(iData[self.obsDict[t+1]]))
-            if self.exog == None:
-                new_exog = 0
-            else:
-                new_exog = np.transpose(np.array(iExog[self.obsDict[t+1]]))
-
-            new_post = self.incrementKF(i, params,post_exp,post_var, new_exog, new_obs)
-            """ replace """
-            post_exp = new_post[0]
-            post_var = new_post[1]
-
-        """ log-likelihood contributions """
-        log_like += new_post[2]
-        return [np.sum(log_like), post_exp]
-
-    """
-    This function goes through each unit to sum their log-likelihood contributions over time.
-    """
-
-    def sampleKF(self, params,init_exp,init_var):
-        post_exp = []
-        log_like = 0.0
-        for i in range(0,self.N):
-            indivKFresults = self.indivKF(params,init_exp,init_var,i)
-            log_like += indivKFresults[0]
-            post_exp.append(indivKFresults[1])
-        neg_avg_log_like = -log_like/self.N
-        print("Current average negative log-likelihood: ",neg_avg_log_like)
-        return [neg_avg_log_like, post_exp]
-
-    """
-    This is a wrapper function for use with our optimization algorithm.
-    """
+    def sampleKF(self, params, init_exp, init_var):
+        result = self.filter(params, initial_mean=init_exp, initial_covariance=init_var)
+        return [-float(result.log_likelihood.sum()) / self.N, list(result.means[:, -1])]
 
     def wrapLoglike(self, params):
-        #print("current parameters:{}".format(params))
-        sampler = self.sampleKF(params,self.init_exp,self.init_var)
-        self.post_exp = post_exp = sampler[1]
-        return sampler[0]
+        return self.sampleKF(params, self.init_exp, self.init_var)[0]
 
-    """
-    We use the minimize function from the scipy package to perform Maximum Likelihood Estimation. 
-    This wrapper function allows convenience. 
-    It returns our parameter estimates and our state variable, for use in forecasting.
-    """
+    def fit(self, params_init=None, *, method="L-BFGS-B", options=None):
+        """Fit by Gaussian maximum likelihood and retain the SciPy result."""
+        initial = self.paramInit() if params_init is None else np.asarray(params_init, dtype=float)
+        self.unpackParams(initial)
+
+        def objective(params):
+            try:
+                with np.errstate(over="raise", invalid="raise"):
+                    return self.wrapLoglike(params)
+            except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+                return 1e100
+
+        result = minimize(objective, initial[:self.n_parameters], method=method, options=options)
+        filtered = self.filter(result.x)
+        self.optimization_result_ = result
+        self.params_ = result.x.copy()
+        self.post_exp = list(filtered.means[:, -1])
+        return self
 
     def wrapMinimize(self, params_init, algo):
-        MLE = minimize(fun = self.wrapLoglike, x0 = params_init, method = algo)
-        return(MLE.x, self.post_exp)
-
-    """This function forecasts the endogenous variable for time increments."""
-
-    def incrementForecast(self, i, params, new_exog, t, statevar):
-        """ unpack parameters """
-        unpacked = self.unpackParams(params)
-        A = unpacked[0]
-        V = unpacked[1]
-        C = unpacked[2]
-        #W = unpacked[3]
-        if type(new_exog) == list and new_exog.any() != None:
-            B = unpacked[4][i,:]
-            exogMultiply = new_exog@B
-        else:
-            exogMultiply = 0
-            
-            
-        #sigma2MLE = unpacked[5]
-
-        """ predict step"""
-        state_exp = np.linalg.matrix_power(A, t)@statevar
- 
-        """ forecast step """
-        forecast_obs = exogMultiply + C@state_exp
-
-        return forecast_obs
-
-    """This function forecasts the endogenous variable per individual."""
-
-    def indivForecast(self, params, i, statevar, newexog, predRange):
-        if newexog == None:
-            iExog = None
-        else:
-            iExog = []
-            for t in range(0, self.K):
-                iExog.append(newexog[t].iloc[i, :])
-            iExog = pd.concat(iExog, axis=1).transpose()
-
-            obsDict = []
-            for t in range(0,int(len(iExog.columns)/(self.stateDim*self.obsDim))):
-                obsDict.append(list(iExog.columns[0+t*self.stateDim*self.obsDim:self.stateDim*self.obsDim*(t+1)]))
-
-        new_obs = []
-
-        if newexog == None:
-            predRange = predRange
-        else:
-            predRange = len(obsDict)
-
-        for t in range(0,predRange):
-            """ predict and update """
-            #reverse = list(reversed(range(len(obsDict))))
-            if newexog != None:
-                new_exog = np.transpose(np.array(iExog[obsDict[t]]))
-            else:
-                new_exog = None
-
-            forecast_endog = self.incrementForecast(i, params, new_exog, (t + 1), statevar[i])
-            new_obs.append(forecast_endog)
-        #new_obs = pd.data
-        return new_obs
-
-    """This function is a wrapper function for forecasting."""
-
-    def forecastKalman(self, params, statevar, newexog, predRange):
-        forecast = []
-        for i in range(0,self.N):
-            indiv_forecast = self.indivForecast(params,i, statevar, newexog, predRange)
-            forecast.append(indiv_forecast)
-        return forecast
-
-    def wrapForecast(self, params, statevar, newexog = None, predRange = 5):
-        forecast = self.forecastKalman(params, statevar, newexog, predRange)
-        forecast_predict = []
-        for t in range(len(forecast)):
-            forecast_predict.append(pd.DataFrame(np.concatenate(forecast[t])).transpose())
-        forecast_dataframe = pd.concat(forecast_predict)
-        return(forecast_dataframe)
+        self.fit(params_init, method=algo)
+        return self.params_.copy(), self.post_exp
 
     def paramInit(self):
-        # Define the number of parameters depending on whether exogenous data is provided
-        if self.exog is None:
-            num_params = 1 + self.stateDim**2 + self.stateDim + self.obsDim*self.stateDim + self.obsDim*self.stateDim + self.N
-        else:
-            num_params = 1 + self.stateDim**2 + self.stateDim + self.obsDim*self.stateDim + self.obsDim*self.stateDim + self.N*self.K
+        n, m = self.stateDim, self.observation_size
+        return np.r_[(0.8 * np.eye(n)).ravel(), np.full(n, -2.),
+                     np.ones(m), np.zeros(m), np.zeros(self.N * self.K)]
 
-        # Define an initial guess for the parameters
-        initial_guess = np.random.rand(num_params)
-        return initial_guess
+    def incrementForecast(self, i, params, new_exog, t, statevar):
+        A, _, C, _, B, _ = self.unpackParams(params)
+        offset = 0. if B is None or new_exog is None else np.asarray(new_exog) @ B[i]
+        return C @ np.linalg.matrix_power(A, t) @ np.asarray(statevar) + offset
+
+    def forecastKalman(self, params, statevar, newexog=None, predRange=5):
+        states = np.asarray(statevar, dtype=float)
+        if states.shape != (self.N, self.stateDim):
+            raise ValueError("Provide the last filtered state for every entity.")
+        if newexog is not None:
+            newexog = tuple(newexog)
+            if len(newexog) != self.K or not newexog:
+                raise ValueError("Future exog must have the original number of regressor tables.")
+            columns = newexog[0].columns
+            if len(columns) == 0 or len(columns) % self.observation_size:
+                raise ValueError("Future exog must cover whole observation periods.")
+            offsets = self._exog_array(newexog, columns)
+            predRange = offsets.shape[1]
+        else:
+            offsets = None
+        if not isinstance(predRange, Integral) or predRange < 1:
+            raise ValueError("predRange must be a positive integer.")
+        A, _, C, _, B, _ = self.unpackParams(params)
+        predictions = []
+        for t in range(predRange):
+            states = states @ A.T
+            forecast = states @ C.T
+            if offsets is not None:
+                forecast += np.einsum("nmk,nk->nm", offsets[:, t], B)
+            predictions.append(forecast)
+        return np.stack(predictions, axis=1).tolist()
+
+    def indivForecast(self, params, i, statevar, newexog=None, predRange=5):
+        return self.forecastKalman(params, statevar, newexog, predRange)[i]
+
+    def wrapForecast(self, params, statevar, newexog=None, predRange=5):
+        values = self.forecastKalman(params, statevar, newexog, predRange)
+        columns = None if newexog is None else newexog[0].columns
+        return pd.DataFrame(np.asarray(values).reshape(self.N, -1),
+                            index=self.endog.index, columns=columns)
+
+    def forecast(self, steps=5, *, exog=None):
+        """Forecast from the last fitted states. Omitted regressors are set to zero."""
+        return self.wrapForecast(self.params_, self.post_exp, newexog=exog, predRange=steps)

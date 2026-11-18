@@ -1,64 +1,74 @@
 # PanelKalmanFilter
 
-For linear dynamic processes with noisy measurements, one can posit the existence of a state variable affecting it. In this state space model, a process enters different states as it evolves. The Kalman Filter seeks to estimate this state variable using expectation maximization. Estimation can incorporate exgoenous, or control, variables other than the estimated state variable. The Kalman Filter is widely used in different fields, including Economics, Engineering, Finance, and Physics.
+Estimate a shared linear Gaussian state-space model for a panel of entities. Each entity has its own latent trajectory and can have its own coefficients for exogenous regressors. The package provides maximum-likelihood fitting, filtered and smoothed state estimates, likelihood contributions, and observation forecasts.
 
-`PanelKalmanFilter` is a Python package meant for use with panel data. This package grew from work performed for estimating Macroeconomic Credit Risk. We used Python since it allowed ease in implementing scientific computation and algorithms. As such, the Kalman Filter can now be applied easily by more end-users in different fields making use of panel or longitudinal datasets. `PanelKalmanFilter` relies heavily on `numpy` and `scipy` to handle matrix algebra and optimization. The expectation maximization algorithm was implemented in a prediction step and an update step, with Maximum Likelihood Estimation used to determine optimal coefficients.
-  
-While `PanelKalmanFilter` was developed for Financial data, it can be used for a wide range of fields. In particular, we can see longitudinal and panel data in Economics and Biostatistics receive extensive treatment with Kalman Filtering with our package. 
+The package grew from work on macroeconomic credit risk. The same panel structure applies to longitudinal data in economics and biostatistics. The filter uses the preceding state estimate to predict the next state and updates it after observing the current measurements. SciPy fits the shared model parameters by maximizing the Gaussian likelihood. The smoother then uses the full observation history to revise earlier state estimates.
 
 ## Installation
-You can install the package using pip:
-```
-pip install git+https://github.com/datstat-consulting/PanelKalmanFilter
-```
 
-# Example
+~~~bash
+python -m pip install git+https://github.com/datstat-consulting/PanelKalmanFilter.git
+~~~
 
-We load a dummy dataset to use. This dataset was generated in R with the following code:
+Run `python -m pip install .` from a checkout to install locally. The package uses NumPy, pandas, and SciPy.
 
-`library(prodest)`
-`set.seed(123)`
-`dummy_panel <- panelSim(N = 3, T = 360, alphaL = .6, alphaK = .4, DGP = 1,
-                        rho = .7, sigeps = .1, sigomg = .3, rholnw = .3)`
-```
-df = pd.read_csv('dummy_training.csv')
-df = df.iloc[:,1:9]
-```
-We reshape the dataset from a long panel format to a wide panel format.
-```
-data = df.pivot(index='idvar', columns='timevar')
-```
-We set our endogenous and exogenous variables to use.
-```
-endog = data['Y']
-exog = [data['sX'] ,data['fX'], data['pX1'], data['pX2'], data['pX3']]
-```
-Set random seed for reproducibility.
-```
-#set your own seed
-np.random.seed()
-```
-Import the class, then set an instance. Note that you can leave the `exog` argument empty to estimate a Kalman Filter only for the endogenous variable.
-```
-from PanelKalmanFilter import all
-pkf = PanelKalmanFilter(stateDim = 2, obsDim = 3, endog = endog, exog = exog)
-```
-Solve the minimization problem with BFGS.
-```
-params_init = pkf.paramInit() #using random initial weights needs more experimentation
-MLE = pkf.wrapMinimize(params_init = params_init, algo = 'BFGS') #needs experimentation with Gradient Descent for random initial weights
-```
-Load the test dummy dataset and perform the forecast. For practical applications, you may need to forecast the exogenous variables first.
-```
-testing = pd.read_csv('dummy_testing.csv')
-testing = testing.iloc[:,1:9]
-testdata = testing.pivot(index='idvar', columns='timevar')
-exog_test = [testdata['sX'] ,testdata['fX'], testdata['pX1'], testdata['pX2'], testdata['pX3']]
+## Panel data
 
-forecast = pkf.wrapForecast(MLE[0], MLE[1], exog_test)
-forecast
-```
-# References
-* Hamilton, J. D. (1994). Time series analysis. Princeton university press.
-* Hu, B., Qiu, W., Xu, C., & Wang, J. (2020). Integration of a Kalman filter in the geographically weighted regression for modeling the transmission of hand, foot and mouth disease. BMC public health, 20, 1-15.
-* Kerbl, S., & Sigmund, M. (2011). What drives aggregate credit risk?. Oesterreichische Nationalbank Financial Stability Report, 22.
+Supply a pandas DataFrame with one row per entity and columns in chronological order. Each time block contains `stateDim * obsDim` consecutive measurements. Within a block, group measurements by their state loading. Each exogenous regressor is a separate wide DataFrame with matching entity and measurement labels.
+
+Use `NaN` for missing observations. The filter updates from available measurements and uses the state prediction alone when all measurements for a period are missing. Regressors must be finite. Omit `exog` when the model uses only endogenous measurements.
+
+## Estimation on the bundled panel
+
+The example uses [training](dummy_training.csv) and [testing](dummy_testing.csv) CSV files from the repository. Both have three entities. Training covers periods 1–24, and the held-out data cover periods 25–36. The example fits one latent state to `Y` with five exogenous variables.
+
+~~~python
+import pandas as pd
+from PanelKalmanFilter import PanelKalmanFilter
+
+training = pd.read_csv("dummy_training.csv")
+testing = pd.read_csv("dummy_testing.csv")
+regressors = ["sX", "fX", "pX1", "pX2", "pX3"]
+
+def wide(frame, variable):
+    return frame.pivot(index="idvar", columns="timevar", values=variable)
+
+endog = wide(training, "Y")
+exog = [wide(training, name) for name in regressors]
+model = PanelKalmanFilter(stateDim=1, obsDim=1, endog=endog, exog=exog).fit()
+print(model.optimization_result_.success, model.optimization_result_.message)
+
+filtered = model.filter()
+smoothed = model.smooth()
+per_entity_log_likelihood = filtered.log_likelihood.sum(axis=1)
+
+future_exog = [wide(testing, name) for name in regressors]
+predictions = model.forecast(exog=future_exog)
+observed = wide(testing, "Y")
+mae_by_entity = (predictions - observed).abs().mean(axis=1)
+~~~
+
+`filter()` and `smooth()` return a `FilterResult` with `means` of shape `(entities, periods, stateDim)`, `covariances` of shape `(entities, periods, stateDim, stateDim)`, and per-period `log_likelihood` contributions. `smooth()` uses Rauch–Tung–Striebel smoothing and returns the fitted model's filtering likelihood alongside the smoothed estimates.
+
+The held-out forecast above is conditional on the supplied regressor values. When future regressors are unknown, pass a separately constructed scenario or omit them to forecast with zero-valued regressors. With future regressor tables, the forecast takes its horizon and column labels from the tables. Otherwise, set the horizon with `model.forecast(steps=12)`.
+
+The original simulation used R's `prodest::panelSim` with the following settings.
+
+~~~r
+library(prodest)
+set.seed(123)
+dummy_panel <- panelSim(
+    N = 3, T = 360, alphaL = .6, alphaK = .4, DGP = 1,
+    rho = .7, sigeps = .1, sigomg = .3, rholnw = .3
+)
+~~~
+
+## Existing parameter-based workflows
+
+`paramInit()` returns the starting parameter vector. `fit(params_init=..., method="BFGS")` selects a different optimizer and still records its SciPy result. The earlier `wrapMinimize`, `sampleKF`, and `wrapForecast` methods remain available for code that passes a parameter vector and the last filtered states explicitly.
+
+## References
+
+- Hamilton, J. D. (1994). *Time Series Analysis*. Princeton University Press.
+- Hu, B., Qiu, W., Xu, C., & Wang, J. (2020). Integration of a Kalman filter in the geographically weighted regression for modeling the transmission of hand, foot and mouth disease. *BMC Public Health*, 20, 1–15.
+- Kerbl, S., & Sigmund, M. (2011). What drives aggregate credit risk? *Oesterreichische Nationalbank Financial Stability Report*, 22.
